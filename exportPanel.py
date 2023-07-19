@@ -52,42 +52,82 @@ def ExportNLA(self, context):
     # strips are found in -
     # object.animation_data.nla_tracks[TrackName].strips[stripName]
     nla_strips = []
+    object = None
     for obj in scene.objects:
         if obj.animation_data and obj.animation_data.nla_tracks:
+            object = obj
             for track in obj.animation_data.nla_tracks:
-                for strip in track.strips:
-                    nla_strips.append((strip, strip.mute))
-                    strip.mute = True
+                if not track.mute:
+                    for strip in track.strips:
+                        nla_strips.append((strip, strip.mute, track))
+                        strip.mute = True
+
+    if not nla_strips:
+        print("no animations to export")
+        return
 
     # save to restore later
     orig_frame_start = scene.frame_start
     orig_frame_end = scene.frame_end
     orig_filepath = scene.render.filepath
-
-    masterKeyframes = []
-    masterSymbols = []
+    masterAnims = []
     # render each strip
 
     entityData = json_contents(context.scene.folderProp.entity)
 
-    if os.path.isfile(context.scene.folderProp.export + "exportMaster.meta"):
-        master = json_contents(context.scene.folderProp.export + "exportMaster.meta")
-        for keyframe in master["keyframes"]:
-            clearKeyFromGUID(entityData, keyframe, "keyframes")
+    if not os.path.isfile(context.scene.folderProp.export + "exportMaster.meta"):
+        with open(context.scene.folderProp.export + "exportMaster.meta", "w") as masterData:
+            masterJson = {
+                "animations": masterAnims
+            }
+            json.dump(masterJson, masterData, indent=4)
+    else:
+        json = json_contents(context.scene.folderProp.export + "exportMaster.meta")
+        if not "animations" in json:
+            with open(context.scene.folderProp.export + "exportMaster.meta", "w") as masterData:
+                masterJson = {
+                    "animations": masterAnims
+                }
+                json.dump(masterJson, masterData, indent=4)
 
-        for symbol in master["symbols"]:
-            clearKeyFromGUID(entityData, symbol, "symbols")
+    master = json_contents(context.scene.folderProp.export + "exportMaster.meta")
 
     for strip in nla_strips:
-        scene.render.filepath = output_dir + strip[0].name + '/'
+        scene.render.filepath = output_dir + strip[2].name + '/'
         scene.frame_start = int(strip[0].frame_start)
         scene.frame_end = int(strip[0].frame_end)
+
+        for n in object.pose.bones:
+            print("resetting bone: " + n.name)
+            n.location = (0, 0, 0)
+            n.rotation_quaternion = (1, 0, 0, 0)
+            n.rotation_axis_angle = (0, 0, 1, 0)
+            n.rotation_euler = (0, 0, 0)
+            n.scale = (1, 1, 1)
+
         strip[0].mute = False
         bpy.ops.render.render(animation=True)
         folder_dir = scene.render.filepath
         folder_name = os.path.basename(scene.render.filepath)
 
+        curAnimJsonCheck = checkIfKeyExists(master, strip[2].name, "animations")
+        if master["animations"] and curAnimJsonCheck[0] == True:
+            print("found master for: " + strip[2].name)
+            curAnim = master["animations"][curAnimJsonCheck[1]]
+
+            for keyframe in curAnim["keyframes"]:
+                print("Clearing: " + keyframe)
+                clearKeyFromGUID(entityData, keyframe, "keyframes")
+
+            for symbol in curAnim["symbols"]:
+                print("Clearing: " + keyframe)
+                clearKeyFromGUID(entityData, symbol, "symbols")
+
+            master["animations"].pop(curAnimJsonCheck[1])
+
+        symbols = []
         keyframes = []
+        animID = ""
         for images in os.listdir(folder_dir):
             if (images.endswith(".png")):
                 print("Found png: " + scene.render.filepath + images)
@@ -99,7 +139,7 @@ def ExportNLA(self, context):
                     json.dump(data, f, indent=4)
 
                 symbolGUID = str(uuid.uuid4())
-                masterSymbols.append(symbolGUID)
+                symbols.append(symbolGUID)
                 entityData["symbols"].append({
                     "$id": symbolGUID,
                     "alpha": 1,
@@ -117,7 +157,6 @@ def ExportNLA(self, context):
 
                 keyframeGUID = str(uuid.uuid4())
                 keyframes.append(keyframeGUID)
-                masterKeyframes.append(keyframeGUID)
                 entityData["keyframes"].append({
                     "$id": keyframeGUID,
                     "length": 1,
@@ -128,9 +167,10 @@ def ExportNLA(self, context):
                     "type": "IMAGE"
                 })
 
-        animExist = checkIfKeyExists(entityData, strip[0].name, "animations")
+        animExist = checkIfKeyExists(entityData, strip[2].name, "animations")
         if not animExist[0]:
             print("animation doesn't exist creating new ")
+            animID = str(uuid.uuid4())
             spriteLayerGUID = str(uuid.uuid4())
             entityData["layers"].append({
                 "$id": spriteLayerGUID,
@@ -143,13 +183,14 @@ def ExportNLA(self, context):
             })
 
             entityData["animations"].append({
-                "$id": str(uuid.uuid4()),
+                "$id": animID,
                 "layers": [spriteLayerGUID],
-                "name": strip[0].name,
+                "name": strip[2].name,
                 "pluginMetadata": {}
             })
         else:
             animation = entityData["animations"][animExist[1]]
+            animID = str(uuid.uuid4())
             print(animation["name"])
             layerExist = False
             for layer in animation["layers"]:
@@ -171,18 +212,18 @@ def ExportNLA(self, context):
                 })
                 animation["layers"].append(spriteLayerGUID)
 
-
+        master["animations"].append({
+            "name": strip[2].name,
+            "keyframes": keyframes,
+            "symbols": symbols
+        })
         strip[0].mute = True
 
     with open(context.scene.folderProp.entity, "w") as entData:
         json.dump(entityData, entData, indent=4)
 
     with open(context.scene.folderProp.export + "exportMaster.meta", "w") as masterData:
-        m = {
-            "keyframes": masterKeyframes,
-            "symbols": masterSymbols
-        }
-        json.dump(m, masterData, indent=4)
+        json.dump(master, masterData, indent=4)
 
 
     # restore changes we made
@@ -246,6 +287,12 @@ class SpriteProperties(bpy.types.PropertyGroup):
         name = "pivotY",
         description="",
         default=0.0,
+        )
+
+    layerName: bpy.props.StringProperty(
+        name = "Layer Name",
+        description=":",
+        default="GeneratedAnim"
         )
 
 class CenterSpritePos(bpy.types.Operator):
@@ -343,6 +390,11 @@ class FE_PT_PANEL(bpy.types.Panel):
         row.scale_y = 1
         row.operator("sprite.center_pos")
         row.operator("sprite.center_piv")
+
+        row = layout.row()
+        row.scale_y = 1
+        row.prop(context.scene.spriteProp, "layerName")
+
         row = layout.row()
         row.scale_y = 0.5
 
