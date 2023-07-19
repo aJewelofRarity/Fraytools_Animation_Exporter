@@ -82,8 +82,15 @@ def ExportNLA(self, context):
             }
             json.dump(masterJson, masterData, indent=4)
     else:
-        json = json_contents(context.scene.folderProp.export + "exportMaster.meta")
-        if not "animations" in json:
+        try:
+            myjson = json_contents(context.scene.folderProp.export + "exportMaster.meta")
+            if not "animations" in myjson:
+                with open(context.scene.folderProp.export + "exportMaster.meta", "w") as masterData:
+                    masterJson = {
+                        "animations": masterAnims
+                    }
+                    json.dump(masterJson, masterData, indent=4)
+        except ValueError as e:
             with open(context.scene.folderProp.export + "exportMaster.meta", "w") as masterData:
                 masterJson = {
                     "animations": masterAnims
