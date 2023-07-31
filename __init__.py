@@ -1,6 +1,9 @@
 #----------------------------------------------------------
 # File __init__.py
 #----------------------------------------------------------
+# flow
+# clear all images > create images > get all images in folder > greate/get meta files > create symbols > create keyframes >
+# create layer > create animation > clear unused meta
 import bpy
 from bpy.types import Operator
 
